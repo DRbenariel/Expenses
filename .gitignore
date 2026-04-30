@@ -1,0 +1,12 @@
+node_modules/
+__pycache__/
+credentials.json
+debug_output.json
+_fetch_status.json
+businesses_output.txt
+Run command.txt
+_tmp_downloads/
+inputs/
+*.pyc
+git_setup.bat
+git_push_fix.bat
