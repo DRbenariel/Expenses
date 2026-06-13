@@ -25,6 +25,47 @@ STATUS_FILE   = os.path.join(BASE_DIR, "_fetch_status.json")
 CONTINUE_FILE = os.path.join(BASE_DIR, "_fetch_continue")
 _fetch_proc   = None
 
+# ── Per-transaction category overrides ────────────────────────────────────────
+# BUSINESS_MAP maps a merchant *name* to one category. Generic transfers like
+# bit / paybox legitimately belong to different categories per transaction, so
+# they can't be handled by name. These overrides pin a *specific* transaction
+# (date + description + amount) to a category, and persist across restarts.
+OVERRIDES_FILE = os.path.join(BASE_DIR, "overrides.json")
+
+def txn_signature(date, description, amount):
+    """Stable identity for a single transaction."""
+    try:
+        amt = round(float(amount), 2)
+    except (TypeError, ValueError):
+        amt = 0.0
+    return f"{str(date).strip()}|{str(description).strip()}|{amt}"
+
+def load_overrides():
+    """Returns { signature: category }. Empty dict if file missing/invalid."""
+    try:
+        with open(OVERRIDES_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def save_override(signature, category):
+    overrides = load_overrides()
+    overrides[signature] = category
+    with open(OVERRIDES_FILE, "w", encoding="utf-8") as f:
+        json.dump(overrides, f, ensure_ascii=False, indent=2)
+
+def apply_overrides(transactions):
+    """Mutate each transaction's Category in place when an override matches."""
+    overrides = load_overrides()
+    if not overrides:
+        return
+    for t in transactions:
+        sig = txn_signature(t.get("Date", ""), t.get("Description", ""), t.get("Amount", 0))
+        if sig in overrides:
+            t["Category"] = overrides[sig]
+
+
 sys.path.insert(0, BASE_DIR)
 from processor import CSVProcessor, INCOME_CATEGORIES, BUSINESS_MAP, all_display_categories
 
@@ -79,6 +120,9 @@ def process_all():
 
     results = {}
     for month_key, transactions in monthly.items():
+        # Apply per-transaction overrides before aggregating so both the totals
+        # and the per-category drill-down reflect manual re-classifications.
+        apply_overrides(transactions)
         totals = processor.aggregate_data(transactions)
 
         try:
@@ -985,6 +1029,7 @@ function openDrawer(cat) {
     ? '<p style="color:var(--muted);text-align:center;margin-top:40px">אין עסקאות</p>'
     : sorted.map(t => {
         const encDesc = htmlEnc(t.description);
+        const encDate = htmlEnc(t.date);
         return '<div class="txn-row">' +
           '<div style="flex:1;min-width:0">' +
             '<div class="txn-desc">' + t.description + '</div>' +
@@ -992,7 +1037,7 @@ function openDrawer(cat) {
           '</div>' +
           '<div style="display:flex;align-items:center;gap:8px;flex-shrink:0">' +
             '<div class="txn-amount' + (t.amount > 0 ? ' credit' : '') + '">' + fmt(Math.abs(t.amount)) + '</div>' +
-            '<button class="btn-recat" onclick="openRecat(this, &quot;' + encDesc + '&quot;)" title="שנה קטגוריה">&#9998;</button>' +
+            '<button class="btn-recat" onclick="openRecat(this, &quot;' + encDate + '&quot;, &quot;' + encDesc + '&quot;, ' + t.amount + ')" title="שנה קטגוריה">&#9998;</button>' +
           '</div>' +
         '</div>';
       }).join('');
@@ -1144,22 +1189,26 @@ function htmlEnc(s) {
   return d.innerHTML.replace(/"/g, '&quot;');
 }
 
-function openRecat(btn, description) {
+function openRecat(btn, date, description, amount) {
   const opts = ALL_CATEGORIES.map(c => '<option value="' + c + '">' + c + '</option>').join('');
   const sel = document.createElement('select');
   sel.className = 'recat-select';
   sel.innerHTML = '<option value="">העבר לקטגוריה...</option>' + opts;
-  sel.onchange = function() { if (sel.value) reclassify(description, sel.value); };
-  sel.onblur   = function() { sel.replaceWith(btn); }; // restore button if user cancels
+  let picked = false;
+  sel.onchange = function() {
+    if (sel.value) { picked = true; reclassify(date, description, amount, sel.value); }
+  };
+  // Restore the button only if the user dismissed without choosing
+  sel.onblur = function() { if (!picked) sel.replaceWith(btn); };
   btn.parentNode.replaceChild(sel, btn);
   sel.focus();
 }
 
-function reclassify(description, category) {
-  fetch('/classify', {
+function reclassify(date, description, amount, category) {
+  fetch('/reclassify', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({business: description, category: category})
+    body: JSON.stringify({date: date, description: description, amount: amount, category: category})
   })
   .then(r => r.json())
   .then(d => {
@@ -1291,6 +1340,41 @@ def debug_max_tabs():
         except Exception as e:
             results[fname] = {"error": str(e)}
     return jsonify(results)
+
+
+@app.route("/reclassify", methods=["POST"])
+def reclassify():
+    """
+    Per-transaction re-categorization for the drawer "switch category" action.
+    Receives { "date", "description", "amount", "category" } and pins THAT
+    specific transaction to the chosen category via overrides.json — without
+    affecting other transactions that share the same (generic) name, e.g. bit.
+    Returns { "success": true, "results": {...}, "unclassified": [...] }.
+    """
+    global RESULTS, UNCLASSIFIED, BUSINESSES, INSIGHTS
+    try:
+        data = request.json or {}
+        date        = str(data.get("date", "")).strip()
+        description = str(data.get("description", "")).strip()
+        amount      = data.get("amount", 0)
+        category    = str(data.get("category", "")).strip()
+
+        if not description or not category:
+            return jsonify({"success": False, "error": "חסר תיאור עסקה או קטגוריה"})
+
+        save_override(txn_signature(date, description, amount), category)
+
+        # Re-process so totals + drill-down reflect the override
+        RESULTS, UNCLASSIFIED = process_all()
+        BUSINESSES = list_businesses_with_categories()
+        INSIGHTS = generate_insights(RESULTS)
+        for _mk in RESULTS:
+            RESULTS[_mk] = _sanitize(RESULTS[_mk])
+
+        return jsonify({"success": True, "results": RESULTS, "unclassified": UNCLASSIFIED})
+
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
 
 
 @app.route("/classify", methods=["POST"])
