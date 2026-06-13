@@ -1314,7 +1314,11 @@ def classify():
         with open(processor_path, "r", encoding="utf-8") as f:
             source = f.read()
 
-        anchor = "    # === עדכונים רלוונטיים חדשים ==="
+        # Insert at the TOP of BUSINESS_MAP so manual re-classifications take
+        # precedence over earlier (more generic) entries — categorize() returns
+        # the first partial match, so a new mapping must be checked first to
+        # actually move an already-classified transaction.
+        anchor = "    # === שיוכים ידניים (גוברים על כל השאר) ==="
         if anchor not in source:
             return jsonify({"success": False, "error": "לא נמצא anchor ב-processor.py"})
 
