@@ -1037,7 +1037,7 @@ function openDrawer(cat) {
           '</div>' +
           '<div style="display:flex;align-items:center;gap:8px;flex-shrink:0">' +
             '<div class="txn-amount' + (t.amount > 0 ? ' credit' : '') + '">' + fmt(Math.abs(t.amount)) + '</div>' +
-            '<button class="btn-recat" onclick="openRecat(this, &quot;' + encDate + '&quot;, &quot;' + encDesc + '&quot;, ' + t.amount + ')" title="שנה קטגוריה">&#9998;</button>' +
+            '<button class="btn-recat" data-date="' + encDate + '" data-desc="' + encDesc + '" data-amount="' + t.amount + '" onclick="openRecat(this)" title="שנה קטגוריה">&#9998;</button>' +
           '</div>' +
         '</div>';
       }).join('');
@@ -1189,18 +1189,28 @@ function htmlEnc(s) {
   return d.innerHTML.replace(/"/g, '&quot;');
 }
 
-function openRecat(btn, date, description, amount) {
+function openRecat(btn) {
+  // Read transaction identity from data-* attributes (robust against quotes
+  // and other special chars in Hebrew merchant names, e.g. בע"מ).
+  const date        = btn.dataset.date;
+  const description = btn.dataset.desc;
+  const amount      = parseFloat(btn.dataset.amount);
   const opts = ALL_CATEGORIES.map(c => '<option value="' + c + '">' + c + '</option>').join('');
   const sel = document.createElement('select');
   sel.className = 'recat-select';
   sel.innerHTML = '<option value="">העבר לקטגוריה...</option>' + opts;
-  let picked = false;
-  sel.onchange = function() {
-    if (sel.value) { picked = true; reclassify(date, description, amount, sel.value); }
-  };
-  // Restore the button only if the user dismissed without choosing
-  sel.onblur = function() { if (!picked) sel.replaceWith(btn); };
-  btn.parentNode.replaceChild(sel, btn);
+  let done = false;
+  sel.addEventListener('change', function() {
+    if (done || !sel.value) return;
+    done = true;
+    reclassify(date, description, amount, sel.value);
+  });
+  // Restore the button if dismissed without choosing. Delay so a pending
+  // change event always fires first (blur can precede change on some browsers).
+  sel.addEventListener('blur', function() {
+    setTimeout(function() { if (!done && sel.parentNode) sel.replaceWith(btn); }, 200);
+  });
+  btn.replaceWith(sel);
   sel.focus();
 }
 
