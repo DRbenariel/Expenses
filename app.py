@@ -26,7 +26,7 @@ CONTINUE_FILE = os.path.join(BASE_DIR, "_fetch_continue")
 _fetch_proc   = None
 
 sys.path.insert(0, BASE_DIR)
-from processor import CSVProcessor, INCOME_CATEGORIES, BUSINESS_MAP
+from processor import CSVProcessor, INCOME_CATEGORIES, BUSINESS_MAP, all_display_categories
 
 try:
     from flask import Flask, jsonify, request, render_template_string
@@ -163,7 +163,7 @@ def list_businesses_with_categories():
 print("Processing expense files...")
 RESULTS, UNCLASSIFIED = process_all()
 BUSINESSES = list_businesses_with_categories()
-ALL_CATEGORIES = sorted(set(BUSINESS_MAP.values()) - {"התעלם", "לא לחישוב", "לא מסווג"})
+ALL_CATEGORIES = all_display_categories()
 
 # Convert numpy/NaN types so Flask jsonify can serialize valid JSON
 def _sanitize(obj):
@@ -916,8 +916,13 @@ function renderAll() {
   }
 
   // ── Categories ──
-  const expenses = Object.entries(totals).filter(([c]) => !INCOME_CATS.includes(c) && c !== 'לא מסווג');
-  const incomes  = Object.entries(totals).filter(([c]) =>  INCOME_CATS.includes(c));
+  // Show every known category (even with 0 this month) so the user can always
+  // drag an expense onto it. Merge the master list with any cats present in totals.
+  const catSet = new Set([...ALL_CATEGORIES, ...Object.keys(totals)]);
+  catSet.delete('לא מסווג');
+  const merged = [...catSet].map(c => [c, totals[c] || 0]);
+  const expenses = merged.filter(([c]) => !INCOME_CATS.includes(c));
+  const incomes  = merged.filter(([c]) =>  INCOME_CATS.includes(c));
 
   const maxExp = Math.max(...expenses.map(([,v]) => v), 1);
   const maxInc = Math.max(...incomes.map(([,v]) => v), 1);
@@ -1386,9 +1391,7 @@ def fetch_status():
             import importlib
             if "processor" in sys.modules:
                 mod = importlib.reload(sys.modules["processor"])
-                ALL_CATEGORIES = sorted(
-                    set(mod.BUSINESS_MAP.values()) - {"התעלם", "לא לחישוב", "לא מסווג"}
-                )
+                ALL_CATEGORIES = mod.all_display_categories()
         return jsonify(data)
     except Exception as e:
         return jsonify({"status": "error", "bank": "", "message": str(e), "done": False})

@@ -579,3 +579,17 @@ class CSVProcessor:
             all_data = self._parse_card_sheet(df, charge_col_idx)
 
         return all_data
+
+
+# ---------------------------------------------------------------------------
+# all_display_categories(): every category that should appear in the UI,
+# even when it has no transactions in the selected month — so the user can
+# always drag an unclassified expense onto it (e.g. חשמל גז).
+# Sources: BUSINESS_MAP values + keyword-fallback categories + income cats.
+# ---------------------------------------------------------------------------
+def all_display_categories():
+    cats = set(BUSINESS_MAP.values())
+    cats |= set(CSVProcessor().categories.keys())
+    cats |= set(INCOME_CATEGORIES)
+    cats -= {"התעלם", "לא לחישוב", "לא מסווג"}
+    return sorted(cats)
