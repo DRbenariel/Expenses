@@ -1520,8 +1520,11 @@ def upload():
                 json.dump(totals, f, ensure_ascii=False, indent=2)
             return jsonify({"success": False, "error": f"אין credentials.json — נשמר מקומית ב-{out}"})
 
-        from sheets_handler import SheetsHandler
-        sheets = SheetsHandler(CREDENTIALS_FILE, SPREADSHEET_URL)
+        import importlib
+        import sheets_handler
+        if "sheets_handler" in sys.modules:
+            sheets_handler = importlib.reload(sheets_handler)
+        sheets = sheets_handler.SheetsHandler(CREDENTIALS_FILE, SPREADSHEET_URL)
         sheets.update_monthly_row("2026", month_label, totals)
         return jsonify({"success": True})
 
